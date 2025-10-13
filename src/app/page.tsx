@@ -1,173 +1,184 @@
+'use client'; // Marks this as a Client Component in Next.js, ensuring it runs on the client side for browser-specific APIs like window.
 
-'use client';
-import { useEffect, useState } from 'react';
-import { Connection, PublicKey } from '@solana/web3.js';
-import { Program, AnchorProvider, web3, utils, Idl , BN } from '@project-serum/anchor';
-import idl from '.././idl.js'; // Changed to .js
+// Import necessary dependencies
+import { useEffect, useState } from 'react'; // React hooks for state and lifecycle management
+import { Connection, PublicKey } from '@solana/web3.js'; // Solana web3.js for blockchain interaction
+import { Program, AnchorProvider, web3, utils, Idl, BN } from '@project-serum/anchor'; // Anchor framework for Solana program interaction
+import idl from '.././idl.js'; // Import the IDL (Interface Definition Language) file for the Solana program, which defines the program's structure
 
-// Define Solana window interface for TypeScript
+// Define TypeScript interface for Solana window object to type-check Phantom wallet properties
 interface SolanaWindow extends Window {
   solana?: {
-    isPhantom?: boolean;
-    isConnected?: boolean;
-    connect?: () => Promise<{ publicKey: { toString: () => string } }>;
-    publicKey?: { toString: () => string };
+    isPhantom?: boolean; // Indicates if Phantom wallet is installed
+    isConnected?: boolean; // Indicates if wallet is connected
+    connect?: () => Promise<{ publicKey: { toString: () => string } }>; // Connect method for wallet
+    publicKey?: { toString: () => string }; // Public key of the connected wallet
   };
 }
 
-// Simple Error Boundary Component
+// Simple Error Boundary Component to catch and display errors in the UI
 function ErrorBoundary({ children }: { children: React.ReactNode }) {
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null); // State to track errors
 
   if (error) {
-    return <div style={{ color: 'red' }}>Error: {error}</div>;
+    return <div style={{ color: 'red' }}>Error: {error}</div>; // Display error message if one exists
   }
 
-  return <>{children}</>;
+  return <>{children}</>; // Render children if no error
 }
 
-// Validate IDL structure
-const idlData: Idl = idl;
-console.log('IDL data loaded:', JSON.stringify(idlData, null, 2)); // Debug: Verify IDL content
-let programID: PublicKey | null = null;
+// Validate and initialize the program ID from the IDL
+const idlData: Idl = idl; // Cast imported IDL to Idl type
+console.log('IDL data loaded:', JSON.stringify(idlData, null, 2)); // Debug: Log IDL content to verify structure
+let programID: PublicKey | null = null; // Variable to store the program ID
 
 try {
+  // Check if IDL contains a valid address and convert it to a PublicKey
   if (idlData?.address && typeof idlData.address === 'string') {
     programID = new PublicKey(idlData.address);
-    console.log('Program ID initialized:', programID.toString()); // Debug
+    console.log('Program ID initialized:', programID.toString()); // Debug: Confirm program ID
   } else {
-    console.warn('IDL address is missing or invalid');
+    console.warn('IDL address is missing or invalid'); // Warn if address is missing
   }
-  // Validate required IDL fields
+  // Validate that the IDL has required fields (instructions, accounts, types)
   if (!idlData.instructions || !idlData.accounts || !idlData.types) {
     throw new Error('Invalid IDL structure: Missing instructions, accounts, or types');
   }
 } catch (e) {
-  console.warn('Could not construct programID or validate IDL:', e);
+  console.warn('Could not construct programID or validate IDL:', e); // Log any errors during validation
 }
 
-// Fallback program ID
+// Fallback program ID in case IDL address is invalid
 const FALLBACK_PROGRAM_ID = 'GgEMjntpZKxcUxdkGkJzqkufYzdoSmezRJWHVTk3dr2h';
 
-const network = "https://api.devnet.solana.com";
+// Solana network configuration
+const network = "https://api.devnet.solana.com"; // Use Solana devnet for testing
 const opts = {
-  preflightCommitment: "processed" as web3.Commitment,
+  preflightCommitment: "processed" as web3.Commitment, // Commitment level for transaction confirmation
 };
 
-const { SystemProgram } = web3;
+const { SystemProgram } = web3; // Extract SystemProgram for creating accounts
 
+// Main Home component
 export default function Home() {
-  const [walletStatus, setWalletStatus] = useState<string | null>(null);
-  const [isWalletConnected, setIsWalletConnected] = useState<boolean>(false);
-  const [publicKey, setPublicKey] = useState<string | null>(null);
+  // State variables for wallet status and connection
+  const [walletStatus, setWalletStatus] = useState<string | null>(null); // Tracks wallet connection status messages
+  const [isWalletConnected, setIsWalletConnected] = useState<boolean>(false); // Tracks if wallet is connected
+  const [publicKey, setPublicKey] = useState<string | null>(null); // Stores connected wallet's public key
 
   console.log('Home component rendered'); // Debug: Confirm component mounts
 
+  // Function to create an Anchor provider for interacting with Solana
   const getProvider = () => {
-    const connection = new Connection(network, opts.preflightCommitment);
-    const win = window as unknown as SolanaWindow;
+    const connection = new Connection(network, opts.preflightCommitment); // Create connection to Solana devnet
+    const win = window as unknown as SolanaWindow; // Cast window to SolanaWindow for type safety
+    // Check if Phantom wallet is available
     if (!win.solana || !win.solana.isPhantom) {
       throw new Error('Phantom wallet not available. Please install Phantom Wallet.');
     }
+    // Check if wallet is connected
     if (!win.solana.isConnected || !win.solana.publicKey) {
       throw new Error('Wallet is not connected. Please connect the wallet first.');
     }
+    // Create Anchor provider with connection and wallet
     const provider = new AnchorProvider(connection, win.solana as any, {
       preflightCommitment: opts.preflightCommitment,
     });
-    console.log('Provider created, wallet public key:', provider.wallet.publicKey.toString()); // Debug
+    console.log('Provider created, wallet public key:', provider.wallet.publicKey.toString()); // Debug: Log provider details
     return provider;
   };
 
-  // Ensure the connected wallet has at least `minLamports` balance; auto-request airdrop on devnet.
+  // Function to ensure wallet has enough balance; requests airdrop on devnet if needed
   const ensureBalance = async (provider: AnchorProvider, minLamports: number) => {
     try {
-      const conn = provider.connection;
-      const pubkey = provider.wallet.publicKey;
-      const balance = await conn.getBalance(pubkey);
-      console.log('Current wallet balance (lamports):', balance);
-      if (balance < minLamports) {
+      const conn = provider.connection; // Get connection from provider
+      const pubkey = provider.wallet.publicKey; // Get wallet public key
+      const balance = await conn.getBalance(pubkey); // Check current balance
+      console.log('Current wallet balance (lamports):', balance); // Debug: Log balance
+      if (balance < minLamports) { // If balance is below threshold
         console.log(`Balance below threshold. Requesting airdrop of ${minLamports} lamports...`);
-        // Request airdrop and confirm (works on devnet/test validator)
+        // Request airdrop on devnet (only works on devnet/testnet)
         const sig = await conn.requestAirdrop(pubkey, minLamports);
-        // Use 'confirmed' commitment for a more robust wait on devnet
+        // Confirm transaction with 'confirmed' commitment
         await conn.confirmTransaction(sig, 'confirmed' as web3.Commitment);
-        // wait a tick for blockhash to propagate
+        // Wait briefly for blockhash propagation
         await new Promise((res) => setTimeout(res, 1000));
-        const newBal = await conn.getBalance(pubkey);
-        console.log('Airdrop complete. New balance (lamports):', newBal);
+        const newBal = await conn.getBalance(pubkey); // Check new balance
+        console.log('Airdrop complete. New balance (lamports):', newBal); // Debug: Log new balance
       }
     } catch (e) {
-      console.warn('Airdrop/ensure balance failed:', e);
+      console.warn('Airdrop/ensure balance failed:', e); // Log any errors
     }
   };
 
   // Function to connect to Phantom wallet
   const connectWallet = async () => {
     try {
-      if (typeof window !== 'undefined') {
-        const { solana } = window as SolanaWindow;
-        if (solana && solana.isPhantom) {
-          const response = await solana.connect?.();
-          const pubKey = response?.publicKey.toString();
-          setWalletStatus('Wallet connected successfully!');
-          setIsWalletConnected(true);
-          setPublicKey(pubKey || null);
-          console.log('Wallet connected, public key:', pubKey); // Debug
+      if (typeof window !== 'undefined') { // Ensure running in browser
+        const { solana } = window as SolanaWindow; // Access Phantom wallet
+        if (solana && solana.isPhantom) { // Check if Phantom is available
+          const response = await solana.connect?.(); // Connect to wallet
+          const pubKey = response?.publicKey.toString(); // Get public key
+          setWalletStatus('Wallet connected successfully!'); // Update status
+          setIsWalletConnected(true); // Mark wallet as connected
+          setPublicKey(pubKey || null); // Store public key
+          console.log('Wallet connected, public key:', pubKey); // Debug: Log public key
         } else {
-          setWalletStatus('Phantom wallet not found. Please install Phantom Wallet 👻');
+          setWalletStatus('Phantom wallet not found. Please install Phantom Wallet 👻'); // Update status if Phantom not found
           console.log('Phantom wallet not found for connection'); // Debug
         }
       }
     } catch (error) {
-      console.error('Error connecting wallet:', error);
-      setWalletStatus('Error connecting wallet: Please try again.');
+      console.error('Error connecting wallet:', error); // Log error
+      setWalletStatus('Error connecting wallet: Please try again.'); // Update status
     }
   };
 
+  // Function to create a campaign on the Solana blockchain
   const createCampaign = async () => {
     try {
+      // Check if wallet is connected
       if (!isWalletConnected || !publicKey) {
         throw new Error('Wallet is not connected. Please connect the wallet first.');
       }
+      // Validate IDL data
       if (!idlData || !idlData.instructions || !idlData.accounts || !idlData.types) {
         throw new Error('Invalid IDL data. Please check idl.js.');
       }
-      const provider = getProvider();
-      const runtimeProgramID = programID ?? new PublicKey(FALLBACK_PROGRAM_ID);
+      const provider = getProvider(); // Get Anchor provider
+      const runtimeProgramID = programID ?? new PublicKey(FALLBACK_PROGRAM_ID); // Use program ID or fallback
       if (!runtimeProgramID) {
         throw new Error('Program ID is not available. Please check idl.js.');
       }
-      const program = new Program(idlData, runtimeProgramID, provider);
+      const program = new Program(idlData, runtimeProgramID, provider); // Initialize Anchor program
 
-      // Diagnostic logs: IDL-declared program id vs runtime program id
-      // Log declared program id (if present in the JS IDL file). `Idl` type doesn't include `address`, so cast to any.
+      // Debug: Log program IDs for diagnostics
       console.log('IDL declared program id:', (idlData as any).address ?? 'none');
       console.log('Using runtime program id:', runtimeProgramID.toString());
       try {
         console.log('Program.programId:', program.programId.toString());
       } catch (e) {
-        // ignore
+        // Ignore errors in logging
       }
 
+      // Derive campaign account address using PDA (Program-Derived Address)
       const [campaign] = await PublicKey.findProgramAddress(
         [
-          utils.bytes.utf8.encode("CAMPAIGN_DEMO"),
-          provider.wallet.publicKey.toBuffer(),
+          utils.bytes.utf8.encode("CAMPAIGN_DEMO"), // Seed for PDA
+          provider.wallet.publicKey.toBuffer(), // Wallet public key as seed
         ],
         runtimeProgramID
       );
 
-      // Ensure the payer has enough SOL (0.1 SOL) to create the account / pay rent.
-      // Adjust threshold as needed depending on your program's account size.
+      // Ensure wallet has enough SOL (0.1 SOL) for account creation
       const thresholdLamports = Math.floor(0.1 * web3.LAMPORTS_PER_SOL);
       await ensureBalance(provider, thresholdLamports);
 
-      // Retry loop to work around transient 'Blockhash not found' simulation errors.
+      // Retry loop to handle transient errors like "Blockhash not found"
       const maxAttempts = 4;
       let attempt = 0;
       let lastErr: any = null;
-      // Extra diagnostics: check whether the program account exists on-chain and log program ids
+      // Debug: Log diagnostics before RPC call
       try {
         const declaredId = (idlData as any)?.address ?? 'none';
         const runtimeId = runtimeProgramID.toString();
@@ -175,17 +186,15 @@ export default function Home() {
         try {
           console.log('Program.programId (from Program instance) =', program.programId.toString());
         } catch (e) {
-          // ignore
+          // Ignore
         }
-        // Type diagnostics
         console.log('Types:', 'typeof IDL.address =', typeof (idlData as any)?.address, ', typeof runtimeProgramID =', typeof runtimeProgramID, ', runtimeProgramID instanceof PublicKey =', runtimeProgramID instanceof PublicKey);
         try {
-          // program.programId may be a PublicKey; check type
           console.log('typeof program.programId =', typeof (program as any).programId, ', program.programId instanceof PublicKey =', (program as any).programId instanceof PublicKey);
         } catch (e) {
-          // ignore
+          // Ignore
         }
-        // Check on-chain whether an account exists at runtimeProgramID
+        // Check if program account exists on-chain
         const pInfo = await provider.connection.getAccountInfo(runtimeProgramID);
         console.log('On-chain program account info for runtimeProgramID:', pInfo ? 'exists' : 'missing/null', pInfo);
       } catch (diagErr) {
@@ -194,40 +203,41 @@ export default function Home() {
       while (attempt < maxAttempts) {
         attempt += 1;
         try {
+          // Call the program's `create` RPC to create a campaign
           await program.rpc.create("My First Campaign", "This is my first campaign", {
             accounts: {
-              campaign: campaign,
-              user: provider.wallet.publicKey,
-              systemProgram: SystemProgram.programId,
-              system_program: SystemProgram.programId,
+              campaign: campaign, // Campaign account (PDA)
+              user: provider.wallet.publicKey, // Wallet public key
+              systemProgram: SystemProgram.programId, // System program for account creation
+              system_program: SystemProgram.programId, // Duplicate for IDL compatibility
             },
           });
-          lastErr = null;
-          break;
+          lastErr = null; // Clear error on success
+          break; // Exit loop on success
         } catch (e) {
-          lastErr = e;
+          lastErr = e; // Store last error
           const msg = (e as any)?.message || '';
-          console.warn(`Attempt ${attempt} failed:`, msg);
-          // If blockhash not found, wait and try again; refresh recent blockhash via getLatestBlockhash
+          console.warn(`Attempt ${attempt} failed:`, msg); // Log attempt failure
+          // Handle blockhash errors by refreshing blockhash and retrying
           if (msg.includes('Blockhash not found') || msg.includes('blockhash expired')) {
             try {
               const latest = await provider.connection.getLatestBlockhash('confirmed');
               await provider.connection.confirmTransaction({ signature: latest.lastValidBlockHeight as unknown as string, ...latest } as any);
             } catch (inner) {
-              // ignore; just sleep
+              // Ignore inner errors
             }
-            await new Promise((res) => setTimeout(res, 800 * attempt));
+            await new Promise((res) => setTimeout(res, 800 * attempt)); // Wait before retry
             continue;
           }
-          break;
+          break; // Exit loop on non-blockhash error
         }
       }
-      if (lastErr) throw lastErr;
-      console.log("Campaign created with address:", campaign.toString());
-      setWalletStatus('Campaign created successfully! Address: ' + campaign.toString());
+      if (lastErr) throw lastErr; // Throw last error if all attempts fail
+      console.log("Campaign created with address:", campaign.toString()); // Debug: Log success
+      setWalletStatus('Campaign created successfully! Address: ' + campaign.toString()); // Update UI
     } catch (error) {
-      console.error('Error creating campaign:', error);
-      // Detect Anchor DeclaredProgramIdMismatch (code 4100) and show helpful guidance
+      console.error('Error creating campaign:', error); // Log error
+      // Handle specific Anchor error for program ID mismatch
       const anyErr = error as any;
       const isDeclaredMismatch =
         anyErr?.error?.code === 4100 ||
@@ -241,16 +251,17 @@ export default function Home() {
       } else if ((anyErr?.message || '').includes('User rejected') || (anyErr?.message || '').includes('User rejected the request')) {
         setWalletStatus('Transaction cancelled by user. Please approve the transaction in your wallet.');
       } else {
-        setWalletStatus('Error creating campaign: ' + (error as Error).message);
+        setWalletStatus('Error creating campaign: ' + (error as Error).message); // Generic error
       }
     }
   };
 
+  // Render UI for connected wallet
   const renderConnectedContainer = () => {
     return (
       <div>
         <button
-          onClick={createCampaign}
+          onClick={createCampaign} // Trigger campaign creation
           style={{
             padding: '10px 20px',
             backgroundColor: '#28a745',
@@ -267,10 +278,11 @@ export default function Home() {
     );
   };
 
+  // Render UI for unconnected wallet
   const renderNotConnectedContainer = () => {
     return (
       <button
-        onClick={connectWallet}
+        onClick={connectWallet} // Trigger wallet connection
         style={{
           padding: '10px 20px',
           backgroundColor: '#0070f3',
@@ -285,61 +297,64 @@ export default function Home() {
     );
   };
 
+  // Effect to check wallet connection on mount
   useEffect(() => {
-    console.log('useEffect running'); // Debug: Confirm useEffect runs
+    console.log('useEffect running'); // Debug: Confirm effect runs
 
     const checkIfWalletIsConnected = async () => {
       console.log('Checking wallet connection'); // Debug: Confirm function runs
       try {
-        if (typeof window !== 'undefined') {
-          const { solana } = window as SolanaWindow;
-          if (solana && solana.isPhantom) {
+        if (typeof window !== 'undefined') { // Ensure browser environment
+          const { solana } = window as SolanaWindow; // Access Phantom wallet
+          if (solana && solana.isPhantom) { // Check if Phantom is installed
             console.log('Phantom wallet found!'); // Debug
-            if (solana.isConnected && solana.publicKey) {
+            if (solana.isConnected && solana.publicKey) { // Check if connected
               const pubKey = solana.publicKey.toString();
-              setWalletStatus('Phantom wallet found and connected!');
-              setIsWalletConnected(true);
-              setPublicKey(pubKey);
+              setWalletStatus('Phantom wallet found and connected!'); // Update status
+              setIsWalletConnected(true); // Mark as connected
+              setPublicKey(pubKey); // Store public key
               console.log('Wallet already connected, public key:', pubKey); // Debug
             } else {
-              setWalletStatus('Phantom wallet found but not connected.');
+              setWalletStatus('Phantom wallet found but not connected.'); // Update status
               setIsWalletConnected(false);
             }
           } else {
             console.log('Phantom wallet not found'); // Debug
-            setWalletStatus('Phantom wallet not found. Please install Phantom Wallet 👻');
+            setWalletStatus('Phantom wallet not found. Please install Phantom Wallet 👻'); // Update status
             setIsWalletConnected(false);
           }
         } else {
           console.log('Window undefined'); // Debug: Should not happen in client component
         }
       } catch (error) {
-        console.error('Error checking wallet connection:', error);
-        setWalletStatus('Error checking wallet connection. Please try again.');
+        console.error('Error checking wallet connection:', error); // Log error
+        setWalletStatus('Error checking wallet connection. Please try again.'); // Update status
         setIsWalletConnected(false);
       }
     };
 
-    checkIfWalletIsConnected(); // Run on mount
+    checkIfWalletIsConnected(); // Run on component mount
 
+    // Add event listener for window load to recheck wallet
     const onLoad = () => {
       console.log('Window load event fired'); // Debug
       checkIfWalletIsConnected();
     };
     window.addEventListener('load', onLoad);
-    return () => window.removeEventListener('load', onLoad);
-  }, []);
+    return () => window.removeEventListener('load', onLoad); // Cleanup listener
+  }, []); // Empty dependency array to run once on mount
 
+  // Render the main UI
   return (
     <ErrorBoundary>
       <div style={{ padding: '20px', textAlign: 'center' }}>
-        <h1>Next.js Solana Campaign App</h1>
-        {walletStatus && <p>{walletStatus}</p>}
+        <h1>Next.js Solana Campaign App</h1> {/* App title */}
+        {walletStatus && <p>{walletStatus}</p>} {/* Display wallet status */}
         {isWalletConnected && publicKey && (
-          <p>Connected Public Key: {publicKey}</p>
+          <p>Connected Public Key: {publicKey}</p> // Display public key if connected
         )}
-        {isWalletConnected ? renderConnectedContainer() : renderNotConnectedContainer()}
-        <p>Check the browser console for debug logs.</p>
+        {isWalletConnected ? renderConnectedContainer() : renderNotConnectedContainer()} {/* Conditional rendering */}
+        <p>Check the browser console for debug logs.</p> {/* Prompt to check console */}
       </div>
     </ErrorBoundary>
   );
