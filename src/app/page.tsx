@@ -2,8 +2,8 @@
 
 // Import necessary dependencies
 import { useEffect, useState } from 'react'; // React hooks for state and lifecycle management
-import { Connection, PublicKey } from '@solana/web3.js'; // Solana web3.js for blockchain interaction
-import { Program, AnchorProvider, web3, utils, Idl, BN } from '@project-serum/anchor'; // Anchor framework for Solana program interaction
+import { Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js'; // Solana web3.js for blockchain interaction
+import { Program, AnchorProvider, web3, utils, Idl } from '@project-serum/anchor'; // Anchor framework for Solana program interaction
 import idl from '.././idl.js'; // Import the IDL (Interface Definition Language) file for the Solana program, which defines the program's structure
 
 // Define TypeScript interface for Solana window object to type-check Phantom wallet properties
@@ -50,7 +50,6 @@ try {
 
 // Fallback program ID in case IDL address is invalid
 const FALLBACK_PROGRAM_ID = 'GgEMjntpZKxcUxdkGkJzqkufYzdoSmezRJWHVTk3dr2h';
-
 // Solana network configuration
 const network = "https://api.devnet.solana.com"; // Use Solana devnet for testing
 const opts = {
@@ -170,14 +169,18 @@ export default function Home() {
         runtimeProgramID
       );
 
+      // Check if campaign already exists
+      const campaignAccount = await program.account.campaign.fetchNullable(campaign);
+      if (campaignAccount) {
+        console.log('Campaign already exists:', campaign.toString());
+        setWalletStatus('Campaign already exists! Address: ' + campaign.toString());
+        return;
+      }
+
       // Ensure wallet has enough SOL (0.1 SOL) for account creation
       const thresholdLamports = Math.floor(0.1 * web3.LAMPORTS_PER_SOL);
       await ensureBalance(provider, thresholdLamports);
 
-      // Retry loop to handle transient errors like "Blockhash not found"
-      const maxAttempts = 4;
-      let attempt = 0;
-      let lastErr: any = null;
       // Debug: Log diagnostics before RPC call
       try {
         const declaredId = (idlData as any)?.address ?? 'none';
@@ -200,18 +203,54 @@ export default function Home() {
       } catch (diagErr) {
         console.warn('Program diagnostics failed:', diagErr);
       }
+
+      // Manually construct the transaction to ensure correct account metadata
+      const instruction = await program.methods
+        .create("My First Campaign", "This is my first campaign")
+        .accounts({
+          campaign: campaign,
+          user: provider.wallet.publicKey,
+          system_program: SystemProgram.programId,
+        })
+        .instruction();
+
+      // Create transaction with explicit account metadata
+      const transaction = new Transaction();
+      transaction.add(instruction);
+
+      // Explicitly set account metadata to match IDL
+      transaction.instructions[0].keys = [
+        { pubkey: campaign, isSigner: false, isWritable: true }, // Ensure campaign is writable
+        { pubkey: provider.wallet.publicKey, isSigner: true, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ];
+
+      // Simulate transaction for debugging
+      const latestBlockhash = await provider.connection.getLatestBlockhash('confirmed');
+      transaction.recentBlockhash = latestBlockhash.blockhash;
+      transaction.feePayer = provider.wallet.publicKey;
+      console.log('Transaction keys before simulation:', transaction.instructions[0].keys.map(k => ({
+        pubkey: k.pubkey.toString(),
+        isSigner: k.isSigner,
+        isWritable: k.isWritable,
+      })));
+
+      const simulation = await provider.connection.simulateTransaction(transaction);
+      console.log('Simulation result:', JSON.stringify(simulation, null, 2));
+
+      // Retry loop for sending transaction
+      const maxAttempts = 4;
+      let attempt = 0;
+      let lastErr: any = null;
       while (attempt < maxAttempts) {
         attempt += 1;
         try {
-          // Call the program's `create` RPC to create a campaign
-          await program.rpc.create("My First Campaign", "This is my first campaign", {
-            accounts: {
-              campaign: campaign, // Campaign account (PDA)
-              user: provider.wallet.publicKey, // Wallet public key
-              systemProgram: SystemProgram.programId, // System program for account creation
-              system_program: SystemProgram.programId, // Duplicate for IDL compatibility
-            },
+          // Send and confirm transaction
+          const signature = await provider.sendAndConfirm(transaction, [], {
+            commitment: 'confirmed',
+            skipPreflight: false,
           });
+          console.log('Transaction successful, signature:', signature);
           lastErr = null; // Clear error on success
           break; // Exit loop on success
         } catch (e) {
@@ -220,12 +259,8 @@ export default function Home() {
           console.warn(`Attempt ${attempt} failed:`, msg); // Log attempt failure
           // Handle blockhash errors by refreshing blockhash and retrying
           if (msg.includes('Blockhash not found') || msg.includes('blockhash expired')) {
-            try {
-              const latest = await provider.connection.getLatestBlockhash('confirmed');
-              await provider.connection.confirmTransaction({ signature: latest.lastValidBlockHeight as unknown as string, ...latest } as any);
-            } catch (inner) {
-              // Ignore inner errors
-            }
+            const latest = await provider.connection.getLatestBlockhash('confirmed');
+            transaction.recentBlockhash = latest.blockhash;
             await new Promise((res) => setTimeout(res, 800 * attempt)); // Wait before retry
             continue;
           }
